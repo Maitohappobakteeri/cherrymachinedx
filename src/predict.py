@@ -3,27 +3,14 @@ from log import (
     log,
     important,
     pretty_format,
-    set_status_state,
-    set_substeps,
-    ProgressStatus,
-    LogTypes,
 )
 from model import Model
 from model2 import Model as Model2
 from config import Configuration
-from plot import plot_simple_array, show_predict, save_generation_snapshot
+from plot import show_predict, save_generation_snapshot
 
 import torch
-from torch import nn, optim
-from torch.utils.data import DataLoader
-import torchvision.datasets as dset
-import torchvision.transforms as transforms
-from statistics import mean, median
-from itertools import tee
 import os
-import numpy as np
-import math
-import json
 
 device = "cpu"
 
@@ -44,12 +31,7 @@ if os.path.isfile("./trained_model"):
     trained_model = torch.load("./trained_model", map_location=torch.device(device))
     model.load_state_dict(trained_model["model"])
 
-if os.path.isfile("./trained_model2_no_gan"):
-    trained_model = torch.load(
-        "./trained_model2_no_gan", map_location=torch.device(device)
-    )
-    model2.load_state_dict(trained_model["model"])
-elif os.path.isfile("./trained_model2"):
+if os.path.isfile("./trained_model2"):
     trained_model = torch.load("./trained_model2", map_location=torch.device(device))
     model2.load_state_dict(trained_model["model"])
 

@@ -1,6 +1,5 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from statistics import mean
 import math
 import torchvision.utils as vutils
 import torch.nn as nn
