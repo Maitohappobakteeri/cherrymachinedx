@@ -1,0 +1,9 @@
+data/
+data-*/
+dataset/
+cache/
+.venv
+__pycache__
+state.json
+*.png
+trained_model*
