@@ -42,7 +42,7 @@ class ProgressStatus:
         progress_bar_width = max(min(max_width * 0.2, 5), 30)
         message_width = max_width - progress_bar_width - 1 - 2
 
-        full_hearts = math.floor(progress_bar_width * (self.step / self.max_steps))
+        full_hearts = math.floor(progress_bar_width * (self.step / max(self.max_steps, 1)))
         full_subhearts = math.floor((progress_bar_width - full_hearts) * (self.substep / self.max_substeps))
         empty_hearts = progress_bar_width - full_hearts - full_subhearts
         progress_bar = "[" + "♥" * full_hearts + "♡" * full_subhearts + " " * empty_hearts + "]"

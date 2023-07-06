@@ -22,21 +22,14 @@ class Discriminator(nn.Module):
         super(Discriminator, self).__init__()
         self.ngpu = ngpu
         self.main = nn.Sequential(
-            nn.Conv2d(in_channels, features, 3, 1, 1, bias=False),
+            # 64x64
+            nn.Conv2d(in_channels, features, 4, 2, 1, bias=False),
             nn.BatchNorm2d(features),
             nn.LeakyReLU(0.2, inplace=True),
-            # 16x16
-            nn.Conv2d(features, features, 3, 1, 1, bias=False),
-            nn.BatchNorm2d(features),
+            # 32x32
+            nn.Conv2d(features, features * 2, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(features * 2),
             nn.LeakyReLU(0.2, inplace=True),
-            # 16x16
-            nn.Conv2d(features, features, 3, 1, 1, bias=False),
-            nn.BatchNorm2d(features),
-            nn.LeakyReLU(0.2, inplace=True),
-            # 16x16
-            nn.Conv2d(features, features * 2, 3, 1, 1, bias=False),
-            nn.Dropout(0.05),
-            nn.Tanh(),
             # 16x16
             nn.Conv2d(features * 2, features * 4, 4, 2, 1, bias=False),
             nn.BatchNorm2d(features * 4),
@@ -46,10 +39,13 @@ class Discriminator(nn.Module):
             nn.BatchNorm2d(features * 8),
             nn.LeakyReLU(0.2, inplace=True),
             # 4x4
-            nn.Conv2d(features * 8, features * 8, 3, 1, 1, bias=False),
-            nn.BatchNorm2d(features * 8),
-            nn.LeakyReLU(0.2, inplace=True),
-            # 4x4
+        )
+
+        self.attention = nn.MultiheadAttention(
+            features * 8, 4, batch_first=True
+        )
+
+        self.final = nn.Sequential(
             nn.Conv2d(features * 8, 1, 4, 1, 0, bias=False),
             nn.Sigmoid(),
         )
@@ -57,4 +53,7 @@ class Discriminator(nn.Module):
         self.apply(weights_init)
 
     def forward(self, input):
-        return self.main(input)
+        batch_size = input.shape[0]
+        output = self.main(input).reshape(batch_size, -1, features * 8)
+        (output, _) = self.attention(output, output, output, need_weights=False)
+        return self.final(output.reshape((batch_size, -1, 4, 4)))

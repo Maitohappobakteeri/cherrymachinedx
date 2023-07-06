@@ -26,7 +26,7 @@ import numpy as np
 import math
 import json
 
-device = "cpu"
+device = "cuda"
 
 important("cherrymachinedx")
 important("Parsing args")
@@ -158,7 +158,7 @@ for epoch in range(args.max_epochs):
         if batch > 10:
             break
 
-        noise = torch.randn(config.batch_size, 100, 1, 1, device=device)
+        noise = torch.randn(x[0].shape[0], 100, 1, 1, device=device).to(device)
 
         x = x[0].to(device)
         x_source = image_transforms2(image_transforms1(x))
@@ -167,13 +167,13 @@ for epoch in range(args.max_epochs):
         encoded = encoder(x_interpolated).detach()
         optimizer_d.zero_grad()
         disc_real = discriminator(x_source)
-        real_labes = torch.ones(x.shape[0])
+        real_labes = torch.ones(x.shape[0]).to(device)
         disc_real_loss = criterion(disc_real.view(-1), real_labes)
         disc_real_loss.backward()
         # optimizer_d.step()
         # optimizer_d.zero_grad()
         pred = model(x_interpolated, encoded)
-        fake_labels = torch.zeros(x.shape[0])
+        fake_labels = torch.zeros(x.shape[0]).to(device)
         disc_fake = discriminator(pred)
         disc_fake_loss = criterion(disc_fake.view(-1), fake_labels) * (
             1.0 / max(disc_real_loss.item(), 1.0)
@@ -184,7 +184,7 @@ for epoch in range(args.max_epochs):
         optimizer.zero_grad()
         y_pred = model(x_interpolated, encoded)
         disc_pred = discriminator(y_pred)
-        real_labes = torch.ones(x.shape[0])
+        real_labes = torch.ones(x.shape[0]).to(device)
         loss_d = criterion(disc_pred.view(-1), real_labes)
         loss_d_factor = 1.0 / max(disc_real_loss.item(), 1.0)
         loss_real = 10 * criterion_mse(
@@ -249,9 +249,9 @@ model.eval()
 with torch.no_grad():
     it = iter(dataloader)
     real = torch.cat((next(it)[0], next(it)[0]))
-    images = nn.functional.interpolate(real, size=16, mode="bilinear")
+    images = nn.functional.interpolate(real, size=16, mode="bilinear").to(device)
     encoded = encoder(images)
     fakes = model(images, encoded)
-show_fakes(real, fakes, "output.png")
+show_fakes(real.cpu(), fakes.cpu(), "output.png")
 
 important("Done")

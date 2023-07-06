@@ -12,7 +12,7 @@ from model import Model
 from encoder import Encoder
 from discriminator import Discriminator
 from config import Configuration
-from plot import plot_simple_array, show_fakes_simple, save_generation_snapshot
+from plot import plot_simple_array, show_fakes_gen1, save_generation_snapshot
 
 import torch
 from torch import nn, optim
@@ -26,7 +26,7 @@ import numpy as np
 import math
 import json
 
-device = "cpu"
+device = "cuda"
 
 important("cherrymachinedx")
 important("Parsing args")
@@ -50,6 +50,8 @@ if os.path.isfile("./state.json"):
     with open("./state.json", "r") as f:
         state = json.load(f)
 
+image_size = 64
+
 image_transforms1 = transforms.RandomChoice(
     [
         transforms.RandomAdjustSharpness(1.00, p=1.0),
@@ -69,8 +71,8 @@ dataset = dset.ImageFolder(
     root="dataset/images/",
     transform=transforms.Compose(
         [ 
-            transforms.Resize(16),
-            transforms.CenterCrop((16, 16)),
+            transforms.Resize(image_size),
+            transforms.CenterCrop((image_size, image_size)),
             transforms.ToTensor(),
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
         ]
@@ -85,10 +87,10 @@ encoder.train()
 discriminator.train()
 
 criterion = nn.BCELoss(reduction="mean")
-criterion_mse = nn.MSELoss(reduction="mean")
+criterion_mse = nn.MSELoss(reduction="none")
 lr_start_div_factor = 3
 lr_d = 0.001
-lr_m = 0.001
+lr_m = 0.01
 optimizer = optim.Adam(model.parameters(), lr=lr_m, betas=(0.5, 0.9))
 optimizer_e = optim.Adam(encoder.parameters(), lr=lr_m, betas=(0.5, 0.9))
 optimizer_d = optim.Adam(discriminator.parameters(), lr=lr_d, betas=(0.5, 0.9))
@@ -96,7 +98,7 @@ total_steps = 100_000
 pct_start = 0.0001
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
-    max_lr=lr_d,
+    max_lr=lr_m,
     div_factor=lr_start_div_factor,
     total_steps=total_steps,
     pct_start=pct_start,
@@ -107,7 +109,7 @@ scheduler = torch.optim.lr_scheduler.OneCycleLR(
 )
 scheduler_e = torch.optim.lr_scheduler.OneCycleLR(
     optimizer_e,
-    max_lr=lr_d,
+    max_lr=lr_m,
     div_factor=lr_start_div_factor,
     total_steps=total_steps,
     pct_start=pct_start,
@@ -156,6 +158,17 @@ def pack_loss_history(loss_history):
 
     return new_list
 
+def mse_loss_for_channel(image, target):
+    loss = criterion_mse(image, target)
+    loss = torch.mean(loss, dim=(2, 3))
+    loss = torch.pow(loss, 2)
+    loss = torch.mean(loss, dim=(1))
+    loss = torch.pow(loss, 2)
+    return 100 * (torch.mean(loss) ** 2)
+
+def mse_loss(image, target):
+    loss = criterion_mse(image, target)
+    return torch.mean(loss)
 
 important("Starting training")
 loss_history = state["loss_history"]
@@ -172,31 +185,37 @@ for epoch in range(args.max_epochs):
     for batch, x in enumerate(dataloader):
         if batch > 10:
             break
-        noise = torch.randn(config.batch_size, 100, 1, 1, device=device)
+        noise = torch.randn(x[0].shape[0], 100, 1, 1, device=device).to(device)
 
         x = x[0].to(device)
         x_source = image_transforms2(image_transforms1(x))
         optimizer_d.zero_grad()
         disc_real = discriminator(x_source)
-        real_labes = torch.ones(x.shape[0])
+        real_labes = torch.ones(x.shape[0]).to(device)
         disc_real_loss = criterion(disc_real.view(-1), real_labes)
         disc_real_loss.backward()
         # optimizer_d.step()
         # optimizer_d.zero_grad()
-        pred = model(noise)
-        fake_labels = torch.zeros(x.shape[0])
+        _, _, pred = model(noise)
+        fake_labels = torch.zeros(x.shape[0]).to(device)
         disc_fake = discriminator(pred)
         disc_fake_loss = criterion(disc_fake.view(-1), fake_labels) * (
             1.0 / max(disc_real_loss.item(), 1.0)
-        )
+        ) * 0.5
+        # disc_fake = discriminator(quick_pred)
+        # disc_fake_loss = disc_fake_loss + criterion(disc_fake.view(-1), fake_labels) * (
+        #     1.0 / max(disc_real_loss.item(), 1.0)
+        # ) * 0.5
         disc_fake_loss.backward()
         optimizer_d.step()
 
         optimizer.zero_grad()
-        y_pred = model(noise)
+        _, _, y_pred = model(noise)
         disc_pred = discriminator(y_pred)
-        real_labes = torch.ones(x.shape[0])
+        real_labes = torch.ones(x.shape[0]).to(device)
         loss_d = criterion(disc_pred.view(-1), real_labes) 
+        # disc_pred = discriminator(quick_pred)
+        # loss_d = loss_d + criterion(disc_pred.view(-1), real_labes) 
         loss_d_factor = 1.0 / max(disc_real_loss.item(), 1.0)
         loss_d_scaled = loss_d * loss_d_factor
         loss = loss_d_scaled
@@ -207,8 +226,14 @@ for epoch in range(args.max_epochs):
         optimizer.zero_grad()
         optimizer_e.zero_grad()
         encoder_output = encoder(x_source)
-        y_pred = model(encoder_output)
-        loss_e = criterion_mse(y_pred, x)
+        decoder_pred, small_decoder_pred, y_pred = model(encoder.reparametrize(*encoder_output))
+        loss_e = mse_loss_for_channel(decoder_pred, x) + mse_loss_for_channel(small_decoder_pred, nn.functional.interpolate(x_source, size=16, mode="bilinear"))
+        # loss_e = loss_e + (mse_loss_for_channel(quick_pred, x) + (mse_loss_for_channel(y_pred, x))) / loss_d_scaled.item()
+
+        beta = 3
+        kl = -0.5 * torch.sum(1 + encoder_output[1] - encoder_output[0].pow(2) - encoder_output[1].exp(), -1)
+        loss_e = loss_e + torch.mean(beta*kl)
+
         loss = loss_d_scaled + loss_e
 
         loss_e.backward()
@@ -217,10 +242,10 @@ for epoch in range(args.max_epochs):
 
         loss_history.append([loss.item(), 1])
 
-        encoder_range = (torch.max(encoder_output) - torch.min(encoder_output)).item()
-        encoder_median = (torch.median(encoder_output)).item()
+        encoder_range = (torch.max(encoder_output[0]) - torch.min(encoder_output[0])).item()
+        encoder_median = (torch.median(encoder_output[0])).item()
         log(
-            f"{epoch}:{batch} - loss: {round(loss.item(), 2)} ({round(loss.item() - loss_d_scaled.item(), 2)} + {round(loss_d_scaled.item(), 2)}) - loss real: {round(disc_real_loss.item(), 2)}, - loss fake: {round(disc_fake_loss.item(), 2)}, lr: {round(math.log10(scheduler.get_last_lr()[0]), 3)}, input range: {round(encoder_range, 1)}, input med: {round(encoder_median, 1)}",
+            f"{epoch}:{batch} - loss: {round(loss.item(), 2)} ({round(loss.item() - loss_d_scaled.item(), 2)} + {round(loss_d_scaled.item(), 2)}) - loss real: {round(disc_real_loss.item(), 2)}, - loss fake: {round(disc_fake_loss.item(), 2)}, lr: {round(math.log10(scheduler.get_last_lr()[0]), 3)}, input range: {round(encoder_range, 3)}, input med: {round(encoder_median, 3)}",
             repeating_status=True,
             substep=True,
         )
@@ -265,11 +290,11 @@ torch.save(trained_model, "./trained_model")
 # )
 
 real = next(iter(dataloader))[0]
-torch.manual_seed(112)
-noise = torch.randn(16, 100, 1, 1, device=device)
+# noise = torch.randn(16, 100, 1, 1, device=device)
 model.eval()
-fakes = model(noise)
-show_fakes_simple(real, fakes, "output.png")
-save_generation_snapshot("v1", fakes)
+encoder_output = encoder(real.to(device))
+decoder_fakes, small_decoder_fakes, fakes = model(encoder.reparametrize(*encoder_output))
+show_fakes_gen1(real.cpu(), small_decoder_fakes.cpu(), decoder_fakes.cpu(), fakes.cpu(), "output.png")
+save_generation_snapshot("v1", fakes.cpu())
 
 important("Done")
