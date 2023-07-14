@@ -127,19 +127,29 @@ def show_fakes_gen1_with_fakes(real, fakes, real_fakes, real_mod, filename):
     plt.close()
 
 
-def show_fakes_gen1_with_fakes_with_steps(real, step1, step2, fakes, real_fakes, filename):
-    diff = torch.divide(torch.subtract(real, fakes), 2.0)
-    mean_diff = torch.mean(torch.abs(diff))
-    stacked = torch.stack((real, step1, step2, fakes), dim=1).view((-1, 3, 64, 64))
-
-    plt.subplot(2, 1, 1)
+def show_fakes_gen1_with_fakes_with_steps(real, steps, fakes, real_fakes, example_data, filename):
+    plt.subplot(4, 1, 1)
     plt.axis("off")
-    plt.title(f"Real/Edit/Fake/Diff (Error {round(100 * mean_diff.item(), 2)}%)")
+    plt.title(f"Data example")
     plt.imshow(
-        np.transpose(vutils.make_grid(stacked, padding=2, normalize=True, nrow=8), (1, 2, 0))
+        np.transpose(vutils.make_grid(example_data, padding=2, normalize=True, nrow=10), (1, 2, 0))
     )
 
-    plt.subplot(2, 1, 2)
+    plt.subplot(4, 1, 2)
+    plt.axis("off")
+    plt.title(f"Generation steps")
+    plt.imshow(
+        np.transpose(vutils.make_grid(steps, padding=2, normalize=True, nrow=10), (1, 2, 0))
+    )
+
+    plt.subplot(4, 1, 3)
+    plt.axis("off")
+    plt.title(f"Reconstruction")
+    plt.imshow(
+        np.transpose(vutils.make_grid(fakes, padding=2, normalize=True, nrow=8), (1, 2, 0))
+    )
+
+    plt.subplot(4, 1, 4)
     plt.axis("off")
     plt.title("Pure fakes")
     plt.imshow(
