@@ -108,7 +108,7 @@ lr_start_div_factor = 10
 lr_mul = 10
 lr_m = 0.001 * lr_mul
 max_steps = 1000
-optimizer = optim.Adam(model2.parameters(), lr=lr_m, betas=(0.5, 0.5))
+optimizer = optim.Adam(model2.parameters(), lr=lr_m, betas=(0.9, 0.9))
 total_steps = 100_000_000
 pct_start = 0.000001
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
@@ -119,8 +119,8 @@ scheduler = torch.optim.lr_scheduler.OneCycleLR(
     pct_start=pct_start,
     #anneal_strategy="linear",
     three_phase=False,
-    base_momentum=0.5,
-    max_momentum=0.5,
+    base_momentum=0.9,
+    max_momentum=0.9,
 )
 
 if os.path.isfile("./trained_model"):
@@ -175,18 +175,17 @@ def save_predictions():
         encoder_output = encoder(real.to(device))
         encoder_reparam = encoder.reparametrize(*encoder_output)
         decoder_fakes = model(encoder_reparam)
-        decoder_fakes_step1 = decoder_fakes
-        decoder_fakes_step2 = decoder_fakes
+        data_example = torch.cat([mix_images(real[0:1], decoder_fakes[0:1], n, device="cuda") for n in [0, 120, 240, 360, 480, 600, 720, 999]], dim=0)
+        decoder_fakes_steps = []
         for step in range(max_steps):
             decoder_fakes1, decoder_fakes2 = torch.split(decoder_fakes, 4, dim=0)
             encoder_reparam1, encoder_reparam2 = torch.split(encoder_reparam, 4, dim=0)
             decoder_fakes1 = model2(decoder_fakes1, encoder_reparam1, step)
             decoder_fakes2 = model2(decoder_fakes2, encoder_reparam2, step)
             decoder_fakes = torch.cat((decoder_fakes1, decoder_fakes2), dim=0)
-            if step == max_steps // 3:
-                decoder_fakes_step1 = decoder_fakes
-            elif step == (max_steps // 3) * 2:
-                decoder_fakes_step2 = decoder_fakes
+            if step in [0, 120, 240, 360, 480, 600, 720, 999]:
+                decoder_fakes_steps.append(decoder_fakes[0:1])
+
             log(
                 f"generating 0:{step}",
                 repeating_status=True,
@@ -208,15 +207,44 @@ def save_predictions():
                 substep=True,
                 no_step=True
             )
-        
-        show_fakes_gen1_with_fakes_with_steps(real.cpu(), decoder_fakes_step1.cpu(), decoder_fakes_step2.cpu(), decoder_fakes.cpu(), true_fakes.cpu(), "output.png")
+                
+        show_fakes_gen1_with_fakes_with_steps(real.cpu(), torch.cat((decoder_fakes_steps), dim=0).cpu(), decoder_fakes.cpu(), true_fakes.cpu(), data_example.cpu(), "output.png")
         save_generation_snapshot("v1", decoder_fakes.cpu())
     model2.train()
     torch.manual_seed(random.randrange(0,10_000))
 
-def mix_images(fake, real, step):
+def minmax_normalization(tensor, new_min, new_max):
+    old_max = torch.max(tensor)
+    old_min = torch.min(tensor)
+    return (tensor - old_min)/ (old_max - old_min + 1e-9) * (new_max - new_min) + new_min
+
+def makeGaussian(size, fwhm = 3, center=None):
+    """ Make a square gaussian kernel.
+
+    size is the length of a side of the square
+    fwhm is full-width-half-maximum, which
+    can be thought of as an effective radius.
+    """
+
+    x = np.arange(0, size, 1, float)
+    y = x[:,np.newaxis]
+
+    if center is None:
+        x0 = y0 = size // 2
+    else:
+        x0 = center[0]
+        y0 = center[1]
+
+    return np.exp(-4*np.log(2) * ((x-x0)**2 + (y-y0)**2) / fwhm**2)
+
+def mix_images(fake, real, step, device=None):
+    device = device or fake.get_device()
     n = step / max_steps
-    return torch.add(torch.mul(real, 1.0 - n), torch.mul(fake, n))
+    image_size = fake.shape[-1]
+    gaussian = (torch.tensor(makeGaussian(image_size, image_size), dtype=torch.float)).reshape(1, 1, image_size, image_size).repeat(fake.shape[0], fake.shape[1], 1, 1).to(device)
+    gaussian = minmax_normalization(gaussian, n, 1.0)
+    noise = n * gaussian
+    return torch.add(torch.mul(real.to(device), torch.ones(fake.shape).to(device) - noise), torch.mul(fake.to(device), noise))
 
 important("Starting training")
 loss_history = state["loss_history"]
@@ -225,7 +253,7 @@ loss_history_discriminator = state["loss_history_discriminator"]
 set_status_state(ProgressStatus(args.max_epochs))
 m_loss_adjust = 1.0
 d_loss_adjust = 1.0
-target_batch = max(32, config.batch_size)
+target_batch = max(64, config.batch_size)
 staleness_for_batch = 0
 for epoch in range(args.max_epochs):
     # dataset.load_batches()
@@ -300,9 +328,9 @@ for epoch in range(args.max_epochs):
             # disc_fake_loss.backward()
 
             model2.requires_grad_(True)
-            mix1 = mix_images(pred_og, x_source, adjusted_step)
+            mix1 = mix_images(pred_og, x_source, adjusted_step, )
             mix2 = mix_images(pred_og, x_source, adjusted_step + 1)
-            pred = model2(mix1, encoder_reparam, adjusted_step)
+            pred, quick_pred  = model2(mix1, encoder_reparam, adjusted_step, returnExtra=True)
             # disc_pred = discriminator(torch.stack((x, pred)).view(x.shape[0], 6, 64, 64))
             # loss_d = criterion(disc_pred[:, 1].view(-1), real_labels) + criterion(disc_pred[:, 2].view(-1), real_labels)
             # loss_d = criterion_mse_mean(disc_pred[:, 0].view(-1), real_labels) + criterion(disc_pred[:, 1].view(-1), real_labels)
@@ -318,8 +346,11 @@ for epoch in range(args.max_epochs):
             # staleness = staleness * staleness_for_batch * 10
             # staleness = nn.functional.relu(torch.sub(staleness, 0.1))
             # loss = (loss_e + loss_d_scaled + diff_mean_encoder + staleness) 
-            loss_mse = (criterion_mse_mean(pred, mix2) / criterion_mse_mean(mix1, mix2))
-            loss = loss_mse
+            
+
+            loss_mse = criterion_mse_mean(pred, mix2)
+            loss_mse2 = criterion_mse_mean(quick_pred, mix2) 
+            loss = loss_mse + loss_mse2
             (loss / (target_batch // config.batch_size) / steps).backward()
 
             # noise = torch.randn(config.batch_size, 600, 1, 1, device=device).to(device)
@@ -328,12 +359,6 @@ for epoch in range(args.max_epochs):
             # loss_d_random = criterion(disc_pred[:, 2].view(-1), real_labels)
             # loss_d_random_scaled = loss_d_random * loss_d_factor * 0.1
             # (loss_d_random_scaled / (target_batch // config.batch_size)).backward()
-
-            if (1 + batch) % (target_batch // config.batch_size) == 0 or (batch + 1) == len(dataloader):
-            # if (1 + batch) % (32) == 0 or (batch + 1) == len(dataloader):
-                optimizer.step()
-                optimizer.zero_grad()
-                scheduler.step()
 
             # optimizer.zero_grad()
             # optimizer_e.zero_grad()
@@ -350,16 +375,21 @@ for epoch in range(args.max_epochs):
 
             loss_history.append([loss.item(), 1])
 
-            mean_diff_pred = criterion_mse_mean(mix1, pred)
-            mean_diff_real = criterion_mse_mean(mix1, mix2)
+            mean_diff_pred = criterion_mse_mean(pred, mix2) - criterion_mse_mean(mix1, mix2)
             log(
-                f"{epoch}:{batch}:{step} - loss: {round(math.log10(1e-12 + loss.item()), 2)}, lr: {round(math.log10(1e-12 + scheduler.get_last_lr()[0]), 3)}, diff1: {round(math.log10(1e-12 + mean_diff_pred.item()), 2)}, diff2: {round(math.log10(1e-12 + mean_diff_real.item()), 2)}",
+                f"{epoch}:{batch}:{step} - loss: {round(math.log10(1e-12 + loss.item()), 2)} ({round(math.log10(1e-12 + loss_mse.item()), 2)} + {round(math.log10(1e-12 + loss_mse2.item()), 2)}), lr: {round(math.log10(1e-12 + scheduler.get_last_lr()[0]), 3)}, step_is_worse: {mean_diff_pred.item() >= 0}, diff: {round(mean_diff_pred.item(), 5)}",
                 repeating_status=True,
                 substep=True,
             )
             # epoch_losses.append(round(math.log10(loss.item()), 2))
-        # if (1 + batch) % (64) == 0 or (batch + 1) == len(dataloader):
-        #     save_predictions()
+        if (1 + batch) % (target_batch // config.batch_size) == 0 or (batch + 1) == len(dataloader):
+        # if (1 + batch) % (32) == 0 or (batch + 1) == len(dataloader):
+            optimizer.step()
+            optimizer.zero_grad()
+            scheduler.step()
+        
+        if (1 + batch) % (512) == 0 or (batch + 1) == len(dataloader):
+            save_predictions()
     log(
         "",
         repeating_status=True,
