@@ -132,14 +132,14 @@ def show_fakes_gen1_with_fakes_with_steps(real, steps, fakes, real_fakes, exampl
     plt.axis("off")
     plt.title(f"Data example")
     plt.imshow(
-        np.transpose(vutils.make_grid(example_data, padding=2, normalize=True, nrow=10), (1, 2, 0))
+        np.transpose(vutils.make_grid(example_data, padding=2, normalize=True, nrow=example_data.shape[0]), (1, 2, 0))
     )
 
     plt.subplot(4, 1, 2)
     plt.axis("off")
     plt.title(f"Generation steps")
     plt.imshow(
-        np.transpose(vutils.make_grid(steps, padding=2, normalize=True, nrow=10), (1, 2, 0))
+        np.transpose(vutils.make_grid(steps, padding=2, normalize=True, nrow=steps.shape[0]), (1, 2, 0))
     )
 
     plt.subplot(4, 1, 3)
