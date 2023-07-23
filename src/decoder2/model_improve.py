@@ -6,16 +6,19 @@ import torch.utils.data
 
 def weights_init(m):
     classname = m.__class__.__name__
-    if classname.find("Conv") != -1:
+    if classname.find("Linear") != -1:
+        nn.init.xavier_normal_(m.weight.data, 1.0)
+    elif classname.find("Conv") != -1:
         nn.init.xavier_normal_(m.weight.data, 1.0)
     elif classname.find("BatchNorm") != -1:
         nn.init.normal_(m.weight.data, 1.0, 0.02)
         nn.init.constant_(m.bias.data, 0)
 
 
-features = 16
+features = 8
 in_channels = 3
 out_channels = 3
+max_steps = 100
 
 
 class PositionalEncoding(nn.Module):
@@ -37,109 +40,29 @@ class DownUpModel(nn.Module):
     def __init__(self, ngpu, in_channels, out_channels, embedding):
         super(DownUpModel, self).__init__()
         self.ngpu = ngpu
+        self.in_channels = in_channels
         self.out_channels = out_channels
         self.embedding = embedding
 
+        self.attention = nn.Sequential(
+            nn.Linear(in_channels, in_channels),
+            nn.Softmax(dim=1),
+            nn.Linear(in_channels, in_channels)
+        )
+
+        self.attention2 = nn.Sequential(
+            nn.Linear(features, features),
+            nn.Softmax(dim=1),
+            nn.Linear(features, features)
+        )
+
+        self.attention3 = nn.Sequential(
+            nn.Linear(features, features),
+            nn.Softmax(dim=1),
+            nn.Linear(features, features)
+        )
+
         self.main = nn.Sequential(
-            # 64x64
-            nn.Conv2d(in_channels, features, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(features),
-            nn.LeakyReLU(0.1, inplace=True),
-            # 32x32
-            nn.Conv2d(features, features * 2, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(features * 2),
-            nn.LeakyReLU(0.1, inplace=True),
-            # 16x16
-            nn.Conv2d(features * 2, features * 4, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(features * 4),
-            nn.LeakyReLU(0.1, inplace=True),
-            # 8x8
-            nn.Conv2d(features * 4, features * 16, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(features * 16),
-            nn.LeakyReLU(0.1, inplace=True),
-            # 4x4
-            nn.Conv2d(features * 16, features * 32, 4, 1, 0, bias=False),
-            nn.BatchNorm2d(features * 32),
-            nn.LeakyReLU(0.1, inplace=True),
-            
-            # 1x1
-            nn.Dropout(p=0.2),
-        )
-
-        self.main2 = nn.Sequential(
-            # 1 x 1
-            nn.ConvTranspose2d(features * 32 + 10, features * 16, 4, 1, 0, bias=False),
-            nn.BatchNorm2d(features * 16),
-            nn.LeakyReLU(0.1, inplace=True),
-            # 4 x 4
-            nn.ConvTranspose2d(features * 16, features * 4, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(features * 4),
-            nn.LeakyReLU(0.1, inplace=True),
-            # 8 x 8
-            nn.ConvTranspose2d(features * 4, features * 2, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(features * 2),
-            nn.LeakyReLU(0.1, inplace=True),
-            # 16 x 16
-            nn.ConvTranspose2d(features * 2, features, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(features),
-            nn.LeakyReLU(0.1, inplace=True),
-            # 32 x 32
-            nn.ConvTranspose2d(features, out_channels, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.LeakyReLU(0.1, inplace=True),
-            # 64 x 64
-        )
-
-        self.mix = nn.Sequential(
-             # 64x64
-            nn.ConvTranspose2d(in_channels + out_channels, out_channels, 1, 1, 0, bias=True),
-            nn.BatchNorm2d(out_channels),
-            nn.LeakyReLU(0.1, inplace=True),
-
-            nn.ConvTranspose2d(out_channels, out_channels, 1, 1, 0, bias=True),
-            nn.BatchNorm2d(out_channels),
-            nn.LeakyReLU(0.1, inplace=True),
-        )
-
-
-        self.apply(weights_init)
-
-    def forward(self, input, step):
-        batch_size = input.shape[0]
-        output = self.main(input)
-        pe = self.embedding(torch.tensor([step] * batch_size, dtype=torch.long)).reshape((batch_size, -1, 1, 1))
-        output = torch.cat((output, pe), dim=1)
-        output = self.main2(output)
-        output = self.mix(torch.cat((output, input), dim=1))
-        return output
-
-
-class Model(nn.Module):
-    def __init__(self, ngpu):
-        super(Model, self).__init__()
-        self.ngpu = ngpu
-
-        self.embedding = PositionalEncoding(1000, 10)
-        self.mix_embedding = nn.Sequential(
-            nn.ConvTranspose2d(10 + features * 16, features * 16, 1, 1, 0, bias=False), 
-            nn.BatchNorm2d(features * 16),
-            nn.LeakyReLU(0.1, inplace=True)
-        )
-
-        self.mix_encoded = nn.Sequential(
-            nn.ConvTranspose2d(600 + features * 16, features * 32, 1, 1, 0, bias=False), 
-            nn.BatchNorm2d(features * 32),
-            nn.LeakyReLU(0.1, inplace=True)
-        )
-
-        down_up_features = in_channels
-        self.main = DownUpModel(ngpu, in_channels + features, down_up_features, self.embedding)
-        self.main2 = DownUpModel(ngpu, down_up_features, down_up_features, self.embedding)
-        self.main3 = DownUpModel(ngpu, down_up_features, down_up_features, self.embedding)
-        self.main4 = DownUpModel(ngpu, down_up_features, down_up_features, self.embedding)
-        self.main5 = DownUpModel(ngpu, down_up_features, down_up_features, self.embedding)
-
-        self.encode = nn.Sequential(
             # 64x64
             nn.Conv2d(in_channels, features, 4, 2, 1, bias=False),
             nn.BatchNorm2d(features),
@@ -160,102 +83,205 @@ class Model(nn.Module):
             nn.Conv2d(features * 8, features * 16, 4, 1, 0, bias=False),
             nn.BatchNorm2d(features * 16),
             nn.LeakyReLU(0.1, inplace=True),
+            
             # 1x1
+            nn.Dropout(p=0.1),
         )
 
-        self.decode = nn.Sequential(
+        self.main2 = nn.Sequential(
             # 1 x 1
-            nn.ConvTranspose2d(features * 32, features * 16, 4, 1, 0, bias=False),
-            nn.BatchNorm2d(features * 16),
+            nn.ConvTranspose2d(features * 16 + 10, features * 8, 4, 1, 0, bias=False),
+            nn.BatchNorm2d(features * 8),
             nn.LeakyReLU(0.1, inplace=True),
             # 4 x 4
-            nn.ConvTranspose2d(features * 16, features * 4, 4, 2, 1, bias=False),
+            nn.ConvTranspose2d(features * 8, features * 4, 4, 2, 1, bias=False),
             nn.BatchNorm2d(features * 4),
             nn.LeakyReLU(0.1, inplace=True),
             # 8 x 8
-            nn.ConvTranspose2d(features * 4, features * 4, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(features * 4),
-            nn.LeakyReLU(0.1, inplace=True),
-            # 16 x 16
             nn.ConvTranspose2d(features * 4, features * 2, 4, 2, 1, bias=False),
             nn.BatchNorm2d(features * 2),
             nn.LeakyReLU(0.1, inplace=True),
-            # 32 x 32
+            # 16 x 16
             nn.ConvTranspose2d(features * 2, features, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(features),
+            nn.LeakyReLU(0.1, inplace=True),
+            # 32 x 32
+            nn.ConvTranspose2d(features, features, 4, 2, 1, bias=False),
             nn.BatchNorm2d(features),
             nn.LeakyReLU(0.1, inplace=True),
             # 64 x 64
         )
 
-        
-        self.final = nn.Sequential(
-            nn.ConvTranspose2d(in_channels + down_up_features + features, features, 3, 1, 1, bias=False),
-            nn.BatchNorm2d(features),
+        self.small_main = nn.Sequential(
+            # 16x16
+            nn.Conv2d(in_channels + features, features * 4, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(features * 4),
             nn.LeakyReLU(0.1, inplace=True),
-
-            nn.ConvTranspose2d(features, out_channels, 3, 1, 1, bias=False),
-        )
-        
-        self.attention = nn.MultiheadAttention(
-            features, 1, batch_first=True
-        )
-
-        self.dropoutp5 = nn.Dropout(p=0.05)
-        self.dropoutp10 = nn.Dropout(p=0.1)
-
-        self.final_quick = nn.Sequential(
-            nn.ConvTranspose2d(features, features, 3, 1, 1, bias=False),
-            nn.BatchNorm2d(features),
+            # 8x8
+            nn.Conv2d(features * 4, features * 8, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(features * 8),
             nn.LeakyReLU(0.1, inplace=True),
-
-            nn.ConvTranspose2d(features, features, 3, 1, 1, bias=False),
-            nn.BatchNorm2d(features),
+            # 4x4
+            nn.Conv2d(features * 8, features * 16, 4, 1, 0, bias=False),
+            nn.BatchNorm2d(features * 16),
             nn.LeakyReLU(0.1, inplace=True),
-
-            nn.ConvTranspose2d(features, out_channels, 3, 1, 1, bias=False),
+            
+            # 1x1
+            nn.Dropout(p=0.1),
         )
 
-        self.final = nn.Sequential(
-            nn.ConvTranspose2d(down_up_features + features, features, 3, 1, 1, bias=False),
+        self.small_main2 = nn.Sequential(
+            # 1 x 1
+            nn.ConvTranspose2d(features * 16 + 10, features * 8, 4, 1, 0, bias=False),
+            nn.BatchNorm2d(features * 8),
+            nn.LeakyReLU(0.1, inplace=True),
+            # 4 x 4
+            nn.ConvTranspose2d(features * 8, features * 4, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(features * 4),
+            nn.LeakyReLU(0.1, inplace=True),
+            # 8 x 8
+            nn.ConvTranspose2d(features * 4, out_channels, 4, 2, 1, bias=False),
+            nn.Tanh()
+            # 16 x 16
+        )
+
+        self.medium_main = nn.Sequential(
+            # 32x32
+            nn.Conv2d(in_channels + features, features, 4, 2, 1, bias=False),
             nn.BatchNorm2d(features),
             nn.LeakyReLU(0.1, inplace=True),
+            # 16x16
+            nn.Conv2d(features, features * 4, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(features * 4),
+            nn.LeakyReLU(0.1, inplace=True),
+            # 8x8
+            nn.Conv2d(features * 4, features * 8, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(features * 8),
+            nn.LeakyReLU(0.1, inplace=True),
+            # 4x4
+            nn.Conv2d(features * 8, features * 16, 4, 1, 0, bias=False),
+            nn.BatchNorm2d(features * 16),
+            nn.LeakyReLU(0.1, inplace=True),
+            
+            # 1x1
+            nn.Dropout(p=0.1),
+        )
 
-            nn.ConvTranspose2d(features, features, 3, 1, 1, bias=False),
+        self.medium_main2 = nn.Sequential(
+            # 1 x 1
+            nn.ConvTranspose2d(features * 16 + 10, features * 8, 4, 1, 0, bias=False),
+            nn.BatchNorm2d(features * 8),
+            nn.LeakyReLU(0.1, inplace=True),
+            # 4 x 4
+            nn.ConvTranspose2d(features * 8, features * 4, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(features * 4),
+            nn.LeakyReLU(0.1, inplace=True),
+            # 8 x 8
+            nn.ConvTranspose2d(features * 4, features * 2, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(features * 2),
+            nn.LeakyReLU(0.1, inplace=True),
+            # 16 x 16
+            nn.ConvTranspose2d(features * 2, features, 4, 2, 1, bias=False),
             nn.BatchNorm2d(features),
             nn.LeakyReLU(0.1, inplace=True),
-
-            nn.ConvTranspose2d(features, out_channels, 3, 1, 1, bias=False),
+            # 32 x 32
         )
 
         self.apply(weights_init)
 
-    def forward(self, input, encoded, step, returnExtra=False):
-        batch_size = input.shape[0]
-        e = original_e = self.encode(input)
-        pe = self.embedding(torch.tensor([step] * batch_size, dtype=torch.long)).reshape((batch_size, -1, 1, 1))
-        e = self.mix_embedding(torch.cat((e, pe), dim=1))
-        e = torch.cat((e, encoded), dim=1)
-        e = self.mix_encoded(e)
-        e = e.reshape((batch_size, -1, features))
-        e, _ = self.attention(e, e, e, need_weights=False)
-        e = e.reshape((batch_size, -1, 1, 1))
-        e = self.dropoutp10(e)
-        d = self.decode(e)
-        d = self.dropoutp5(d)
-        output = self.main(torch.cat((input, d), dim=1), step)
-        output = self.main2(output, step)
-        output = self.main3(output, step)
-        output = self.main4(output, step)
-        output = self.main5(output, step)
-        output =  self.final(torch.cat((output, d), dim=1))
-        # image, factors = torch.split(output, 3, dim=1)
-        # factors = torch.divide(torch.add(factors, 1.0002), 2.0002)
-        # factors = torch.divide(torch.add(factors, 1.02), 2.02)
-        # inv_factors = torch.sub(torch.ones(factors.shape).to(input.get_device()), factors)
-        if returnExtra:
-            output2 = self.final_quick(d)
-            return torch.tanh(output), \
-                   torch.tanh(torch.add(torch.atanh(torch.divide(input, 1 + 1e-11)), output2))
+    def get_patches(self, t, patch_size, channels):
+        t = torch.nn.functional.unfold(t, patch_size, stride=patch_size)
+        return t.permute((0, 2, 1)).reshape((-1, channels, patch_size, patch_size))
 
-        # return torch.tanh(torch.add(torch.atanh(torch.divide(input, 1 + 1e-9)), output))
-        return torch.tanh(output)
+    def combine_patches(self, t, batch_size, image_size, patch_size, channels):
+        t = t.reshape((batch_size, -1, patch_size ** 2 * channels)).permute((0, 2, 1))
+        return torch.nn.functional.fold(t, (image_size, image_size), patch_size, stride=patch_size)
+
+    def small(self, input, step):
+        batch_size = input.shape[0]
+        in_channels = input.shape[1]
+        image_size = 64
+        patch_size = 16
+        patches_per_image = (image_size // patch_size) ** 2
+        patches = self.get_patches(input, patch_size, in_channels)
+        patches = self.small_main(patches)
+        pe_patches = self.embedding(torch.tensor([step] * batch_size * patches_per_image, dtype=torch.long)).reshape((batch_size * patches_per_image, -1, 1, 1))
+        patches = torch.cat((patches, pe_patches), dim=1)
+        patches = self.small_main2(patches)
+        return self.combine_patches(patches, batch_size, image_size, patch_size, self.out_channels)
+
+    def medium(self, input, step):
+        batch_size = input.shape[0]
+        in_channels = input.shape[1]
+        image_size = 64
+        patch_size = 32
+        patches_per_image = (image_size // patch_size) ** 2
+        patches = self.get_patches(input, patch_size, in_channels)
+        patches = self.medium_main(patches)
+        pe_patches = self.embedding(torch.tensor([step] * batch_size * patches_per_image, dtype=torch.long)).reshape((batch_size * patches_per_image, -1, 1, 1))
+        patches = torch.cat((patches, pe_patches), dim=1)
+        patches = self.medium_main2(patches)
+        return self.combine_patches(patches, batch_size, image_size, patch_size, features)
+
+    def forward(self, input, prev_output, step):
+        batch_size = input.shape[0]
+
+        attention_weight = self.attention(input.reshape((-1, self.in_channels))).reshape(input.shape)
+        input = input * attention_weight
+
+        output = self.main(input)
+        pe = self.embedding(torch.tensor([step] * batch_size, dtype=torch.long)).reshape((batch_size, -1, 1, 1))
+        output = torch.cat((output, pe), dim=1)
+        output = self.main2(output)
+        
+        attention_weight = self.attention2(output.reshape((-1, features))).reshape(output.shape)
+        output = output * attention_weight
+
+        folded2 = self.medium(torch.cat((input, output), dim=1), step)
+
+        attention_weight = self.attention3(folded2.reshape((-1, features))).reshape(folded2.shape)
+        folded2 = folded2 * attention_weight
+
+        folded = self.small(torch.cat((input, folded2), dim=1), step)
+
+        return prev_output + folded
+
+
+class Model(nn.Module):
+    def __init__(self, ngpu):
+        super(Model, self).__init__()
+        self.ngpu = ngpu
+
+        self.embedding = PositionalEncoding(max_steps, 10)
+
+        down_up_features = features
+        self.main = DownUpModel(ngpu, in_channels, down_up_features, self.embedding)
+        self.main_list = nn.ModuleList([
+          DownUpModel(ngpu, in_channels + down_up_features, down_up_features, self.embedding) for x in range(7)  
+        ])
+
+        self.final = nn.Sequential(
+            nn.ConvTranspose2d(down_up_features, features, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(features),
+            nn.LeakyReLU(0.1, inplace=True),
+            
+            nn.ConvTranspose2d(features, out_channels, 1, 1, 0, bias=False),
+            nn.Tanh(),
+        )
+
+        self.scale = nn.Linear(1, 1)
+
+        self.apply(weights_init)
+
+    def forward(self, input, step, returnDiff=False):
+        output = self.main(input, torch.zeros((input.shape[0], features, *input.shape[2:]), device="cuda"), step)
+        for m in self.main_list:
+            output = m(torch.cat((input, output), dim=1), output, step)
+        output =  self.final(output)
+        # return torch.tanh(output)
+        # return torch.tanh(torch.atanh(torch.clamp(input, -1.0 + 1e-12, 1.0 - 1e-12)) + output)
+        diff = self.scale(output.reshape(-1, 1)).reshape(input.shape)
+        if returnDiff:
+            return input + diff, diff 
+        return input + diff
+
