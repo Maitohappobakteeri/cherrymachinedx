@@ -100,6 +100,9 @@ encoder.eval()
 model2 = Model2(config).to(device)
 model2.train()
 
+discriminator = IsSameDiscriminator(config).to(device)
+discriminator.train()
+
 criterion = nn.BCELoss(reduction="mean")
 criterion_mse = nn.MSELoss(reduction="none")
 criterion_mse_mean = nn.MSELoss(reduction="mean")
@@ -108,10 +111,22 @@ lr_start_div_factor = 10
 lr_mul = 10
 lr_m = 0.001 * lr_mul
 optimizer = optim.Adam(model2.parameters(), lr=lr_m, betas=(0.99, 0.99))
+optimizer_d = optim.Adam(model2.parameters(), lr=lr_m, betas=(0.99, 0.99))
 total_steps = 100_000_000
 pct_start = 0.000001
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
+    max_lr=lr_m,
+    div_factor=lr_start_div_factor,
+    total_steps=total_steps,
+    pct_start=pct_start,
+    #anneal_strategy="linear",
+    three_phase=False,
+    base_momentum=0.99,
+    max_momentum=0.99,
+)
+scheduler_d = torch.optim.lr_scheduler.OneCycleLR(
+    optimizer_d,
     max_lr=lr_m,
     div_factor=lr_start_div_factor,
     total_steps=total_steps,
@@ -132,6 +147,9 @@ if os.path.isfile("./trained_model2"):
     model2.load_state_dict(trained_model["model"])
     optimizer.load_state_dict(trained_model["model_optimizer"])
     scheduler.load_state_dict(trained_model["model_scheduler"])
+    discriminator.load_state_dict(trained_model["discriminator"])
+    optimizer_d.load_state_dict(trained_model["discriminator_optimizer"])
+    scheduler_d.load_state_dict(trained_model["discriminator_scheduler"])
 
 def pack_loss_history(loss_history):
     new_list = []
@@ -187,8 +205,8 @@ def save_predictions(max_steps=max_steps, filename="output.png"):
         decoder_fakes_steps = []
         for step in range(max_steps):
             decoder_fakes1, decoder_fakes2 = torch.split(decoder_fakes, 4, dim=0)
-            decoder_fakes1 = model2(decoder_fakes1, step)
-            decoder_fakes2 = model2(decoder_fakes2, step)
+            decoder_fakes1 = model2(decoder_fakes1, step).clamp(-1.0, 1.0)
+            decoder_fakes2 = model2(decoder_fakes2, step).clamp(-1.0, 1.0)
             decoder_fakes = torch.cat((decoder_fakes1, decoder_fakes2), dim=0)
             if step in example_steps:
                 decoder_fakes_steps.append(decoder_fakes[0:1])
@@ -204,8 +222,8 @@ def save_predictions(max_steps=max_steps, filename="output.png"):
         true_fakes = add_noise(model(noise), 0, noise_masks)
         for step in range(max_steps):
             true_fakes1, true_fakes2 = torch.split(true_fakes, 4, dim=0)
-            true_fakes1 = model2(true_fakes1, step)
-            true_fakes2 = model2(true_fakes2, step)
+            true_fakes1 = model2(true_fakes1, step).clamp(-1.0, 1.0)
+            true_fakes2 = model2(true_fakes2, step).clamp(-1.0, 1.0)
             true_fakes = torch.cat((true_fakes1, true_fakes2), dim=0)
             log(
                 f"generating 1:{step}",
@@ -307,103 +325,46 @@ for epoch in range(args.max_epochs):
         for step in range(steps):
             adjusted_step = int(step * (max_steps / steps) + batch % (max_steps / steps))
 
+            mix1 = add_noise(mix_images(pred_og, x_source, adjusted_step), adjusted_step, noise)
+            mix2 = add_noise(mix_images(pred_og, x_source, adjusted_step + 1), adjusted_step + 1, noise)
+
             fake_labels = torch.ones(x.shape[0]).to(device)
             real_labels = torch.zeros(x.shape[0]).to(device)
 
-            # disc_real = discriminator(torch.stack((x, x_modified)).view(x.shape[0], 6, 64, 64))
-            # loss_per_image = mse_loss_per_image(x_modified_no_resize, x)
-            # disc_real_loss = criterion(disc_real[:, 1].view(-1), real_labels) + criterion(disc_real[:, 2].view(-1), real_labels)
-            # # disc_real_loss = criterion(disc_real[:, 1].view(-1), real_labels)
-            # # disc_real_loss = disc_real_loss / 2
-            # (disc_real_loss / (target_batch // config.batch_size) / max_steps).backward()
+            model2.requires_grad_(False)
+            discriminator.requires_grad_(True)
 
-            # loss_per_image = mse_loss_per_image(x, x)
-            # disc_real_identity = discriminator(torch.stack((x, x)).view(x.shape[0], 6, 64, 64))
-            # disc_real_identity_loss = criterion(disc_real_identity[:, 1].view(-1), real_labels) + criterion(disc_real_identity[:, 2].view(-1), real_labels)
-            # (disc_real_identity_loss / (target_batch // config.batch_size) / max_steps).backward()
+            disc_real = discriminator(torch.cat((mix1, mix2), dim=1))
+            disc_real_loss = criterion(disc_real[:, 0].view(-1), real_labels) + criterion(disc_real[:, 1].view(-1), real_labels)
+            (disc_real_loss / (target_batch // config.batch_size) / steps).backward()
 
-            # rev_x = torch.flip(x, dims=(0,))
-            # rev_loss_per_image = mse_loss_per_image(x_modified_no_resize, rev_x)
-            # disc_fake2 = discriminator(torch.stack((rev_x, x_modified)).view(x.shape[0], 6, 64, 64))
-            # disc_fake_loss2 = criterion(disc_fake2[:, 1].view(-1), fake_labels) + criterion(disc_fake2[:, 2].view(-1), real_labels)
-            # # disc_fake_loss2 = criterion(disc_fake2[:, 1].view(-1), fake_labels)
-            # # disc_fake_loss2 = disc_fake_loss2 / 2
-            # disc_real_loss = torch.divide(disc_real_loss + disc_real_identity_loss + disc_fake_loss2, 3)
-            # (disc_fake_loss2 / (target_batch // config.batch_size) / max_steps).backward()
-            # # optimizer_d.step()
-            # # optimizer_d.zero_grad()
-            # encoder_output = encoder(x_source)
-            # encoder_reparam = encoder.reparametrize(*encoder_output)
-            # pred = model2(mix_images(model(encoder_reparam), x_source, step), encoder_reparam, step)
-            # loss_per_image = mse_loss_per_image(pred, x)
-            # disc_fake = discriminator(torch.stack((x, pred)).view(x.shape[0], 6, 64, 64))
-            # disc_fake_loss = criterion(disc_fake[:, 1].view(-1), fake_labels) + criterion(disc_fake[:, 2].view(-1), fake_labels)
-            # # disc_fake_loss = criterion(disc_fake[:, 1].view(-1), fake_labels)
-            # # disc_fake_loss = disc_fake_loss / 2
-            # loss_d_factor = 1.0 / max(disc_real_loss.item(), 0.05)
-            # disc_fake_loss = disc_fake_loss
-            # (disc_fake_loss / (target_batch // config.batch_size) / max_steps).backward()
-
-            # rev_pred = torch.flip(pred, dims=(0,))
-            # rev_loss_per_image = mse_loss_per_image(rev_pred, x)
-            # disc_fake2 = discriminator(torch.stack((x, rev_pred)).view(x.shape[0], 6, 64, 64))
-            # disc_fake_loss2 = criterion(disc_fake2[:, 1].view(-1), fake_labels) + criterion(disc_fake2[:, 2].view(-1), fake_labels)
-            # # disc_fake_loss2 = criterion(disc_fake2[:, 1].view(-1), fake_labels)
-            # # disc_fake_loss2 = disc_fake_loss2 / 2
-            # disc_fake_loss = torch.divide(disc_fake_loss + disc_fake_loss2, 2)
-            
-            # (disc_fake_loss2 / (target_batch // config.batch_size) / max_steps).backward()
-            # disc_fake_loss.backward()
-
-            # model2.requires_grad_(True)
-            mix1 = add_noise(mix_images(pred_og, x_source, adjusted_step), adjusted_step, noise)
-            mix2 = add_noise(mix_images(pred_og, x_source, adjusted_step + 1), adjusted_step + 1, noise)
             pred, pred_diff  = model2(mix1, adjusted_step, returnDiff=True)
-            # disc_pred = discriminator(torch.stack((x, pred)).view(x.shape[0], 6, 64, 64))
-            # loss_d = criterion(disc_pred[:, 1].view(-1), real_labels) + criterion(disc_pred[:, 2].view(-1), real_labels)
-            # loss_d = criterion_mse_mean(disc_pred[:, 0].view(-1), real_labels) + criterion(disc_pred[:, 1].view(-1), real_labels)
-            # loss_d = criterion(disc_pred[:, 1].view(-1), real_labels)
-            # disc_pred = discriminator(quick_pred)
-            # loss_d = loss_d + criterion(disc_pred.view(-1), real_labes) 
-            # loss_d_factor = 1.0 / max(disc_real_loss.item(), 1.0)
-            # diff_mean_encoder = nn.functional.relu(torch.add(torch.mul(torch.mean(torch.abs(encoder_output[0])), -1), 0.5))
-            # staleness = torch.mean(disc_pred, dim=2)
-            # staleness = torch.var(staleness)
-            # staleness = nn.functional.relu(torch.add(torch.mul(staleness, -1), 0.2))
-            # staleness_for_batch = (staleness_for_batch * (10 * target_batch - 1) + staleness.item()) / (10 * target_batch)
-            # staleness = staleness * staleness_for_batch * 10
-            # staleness = nn.functional.relu(torch.sub(staleness, 0.1))
-            # loss = (loss_e + loss_d_scaled + diff_mean_encoder + staleness) 
-            
+            disc_fake = discriminator(torch.cat((mix1, pred), dim=1))
+            disc_fake_loss = criterion(disc_fake[:, 0].view(-1), fake_labels) + criterion(disc_fake[:, 1].view(-1), fake_labels)
+            loss_d_factor = 1.0 / max(disc_real_loss.item(), 0.05)
+            disc_fake_loss = disc_fake_loss
+            (disc_fake_loss / (target_batch // config.batch_size) / steps).backward()
+
+            model2.requires_grad_(True)
+            discriminator.requires_grad_(False)
+
+            pred, pred_diff  = model2(mix1, adjusted_step, returnDiff=True)
+
 
             target = mix2 - mix1
             target_max = torch.max(torch.abs(target))
             target_max = target_max if target_max.item() > 0 else 1.0
             loss_mse = criterion_mse_mean(pred_diff / target_max, target / target_max)
+
+            disc_pred = discriminator(torch.cat((x, pred), dim=1))
+            loss_d = criterion(disc_pred[:, 0].view(-1), real_labels) + criterion(disc_pred[:, 1].view(-1), real_labels)
+            loss_d_scaled = loss_d * loss_d_factor * 0.1
+            loss_d_scaled = (loss_d_scaled * loss_mse ** 2) * 0.1
+            loss = loss_mse + loss_d_scaled
+
             loss = loss_mse
-            # ((loss_mult * loss) / (target_batch // config.batch_size) / steps).backward()
             (loss / (target_batch // config.batch_size) / steps).backward()
 
-
-            # noise = torch.randn(config.batch_size, 600, 1, 1, device=device).to(device)
-            # pred = model2(model(noise), noise, step)
-            # disc_pred = discriminator(torch.stack((x, pred)).view(x.shape[0], 6, 64, 64))
-            # loss_d_random = criterion(disc_pred[:, 2].view(-1), real_labels)
-            # loss_d_random_scaled = loss_d_random * loss_d_factor * 0.1
-            # (loss_d_random_scaled / (target_batch // config.batch_size)).backward()
-
-            # optimizer.zero_grad()
-            # optimizer_e.zero_grad()
-            # encoder_output = encoder(x_source)
-            # decoder_pred = model(encoder.reparametrize(*encoder_output))
-            # kl = -0.5 * torch.sum(1 + encoder_output[1] - encoder_output[0].pow(2) - encoder_output[1].exp(), -1)
-            # loss_e = mse_loss(decoder_pred, x) + torch.mean(beta*kl)
-            # # loss_e = loss_e + (mse_loss_for_channel(quick_pred, x) + (mse_loss_for_channel(y_pred, x))) / loss_d_scaled.item()
-            # loss = loss + loss_e
-
-            # loss_e.backward()
-            # optimizer.step()
-            # optimizer_e.step()
 
             loss_history.append([loss.item(), 1])
 
@@ -420,6 +381,10 @@ for epoch in range(args.max_epochs):
             optimizer.step()
             optimizer.zero_grad()
             scheduler.step()
+
+            optimizer_d.step()
+            optimizer_d.zero_grad()
+            scheduler_d.step()
         
         if (1 + batch) % (128) == 0 or (batch + 1) == len(dataloader):
             save_predictions(10, "quick")
@@ -444,6 +409,9 @@ trained_model = {
     "model": model2.state_dict(),
     "model_optimizer": optimizer.state_dict(),
     "model_scheduler": scheduler.state_dict(),
+    "discriminator": discriminator.state_dict(),
+    "discriminator_optimizer": optimizer_d.state_dict(),
+    "discriminator_scheduler": scheduler_d.state_dict(),
 }
 torch.save(trained_model, "./trained_model2")
 # plot_simple_array(

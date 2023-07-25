@@ -245,7 +245,8 @@ for epoch in range(args.max_epochs):
         encoder.requires_grad_(False)
         discriminator.requires_grad_(True)
 
-        disc_real = discriminator(torch.stack((x, x_modified)).view(x.shape[0], 6, 64, 64))
+        # does stack work correctly?
+        disc_real = discriminator(torch.cat((x, x_modified), dim=1))
         loss_per_image = mse_loss_per_image(x_modified_no_resize, x)
         disc_real_loss = criterion(disc_real[:, 0].view(-1), real_labels) + criterion(disc_real[:, 1].view(-1), real_labels)
         # disc_real_loss = criterion(disc_real[:, 0].view(-1), real_labels)
@@ -253,13 +254,13 @@ for epoch in range(args.max_epochs):
         (disc_real_loss / (target_batch // config.batch_size)).backward()
 
         loss_per_image = mse_loss_per_image(x, x)
-        disc_real_identity = discriminator(torch.stack((x, x)).view(x.shape[0], 6, 64, 64))
+        disc_real_identity = discriminator(torch.cat((x, x), dim=1))
         disc_real_identity_loss = criterion(disc_real_identity[:, 0].view(-1), real_labels) + criterion(disc_real_identity[:, 1].view(-1), real_labels)
         (disc_real_identity_loss / (target_batch // config.batch_size)).backward()
 
         rev_x = torch.flip(x, dims=(0,))
         rev_loss_per_image = mse_loss_per_image(x_modified_no_resize, rev_x)
-        disc_fake2 = discriminator(torch.stack((rev_x, x_modified)).view(x.shape[0], 6, 64, 64))
+        disc_fake2 = discriminator(torch.cat((rev_x, x_modified), dim=1))
         disc_fake_loss2 = criterion(disc_fake2[:, 0].view(-1), fake_labels) + criterion(disc_fake2[:, 1].view(-1), real_labels)
         # disc_fake_loss2 = criterion(disc_fake2[:, 0].view(-1), fake_labels)
         # disc_fake_loss2 = disc_fake_loss2 / 2
@@ -270,7 +271,7 @@ for epoch in range(args.max_epochs):
         encoder_output = encoder(x_source)
         pred = model(encoder.reparametrize(*encoder_output))
         loss_per_image = mse_loss_per_image(pred, x)
-        disc_fake = discriminator(torch.stack((x, pred)).view(x.shape[0], 6, 64, 64))
+        disc_fake = discriminator(torch.cat((x, pred), dim=1))
         disc_fake_loss = criterion(disc_fake[:, 0].view(-1), fake_labels) + criterion(disc_fake[:, 1].view(-1), fake_labels)
         # disc_fake_loss = criterion(disc_fake[:, 0].view(-1), fake_labels)
         # disc_fake_loss = disc_fake_loss / 2
@@ -280,7 +281,7 @@ for epoch in range(args.max_epochs):
 
         rev_pred = torch.flip(pred, dims=(0,))
         rev_loss_per_image = mse_loss_per_image(rev_pred, x)
-        disc_fake2 = discriminator(torch.stack((x, rev_pred)).view(x.shape[0], 6, 64, 64))
+        disc_fake2 = discriminator(torch.cat((x, rev_pred), dim=1))
         disc_fake_loss2 = criterion(disc_fake2[:, 0].view(-1), fake_labels) + criterion(disc_fake2[:, 1].view(-1), fake_labels)
         # disc_fake_loss2 = criterion(disc_fake2[:, 0].view(-1), fake_labels)
         # disc_fake_loss2 = disc_fake_loss2 / 2
@@ -304,7 +305,7 @@ for epoch in range(args.max_epochs):
 
         encoder_output = encoder(x_source)
         (pred, predx16, pred_simple) = model(encoder.reparametrize(*encoder_output), outputx16=True)
-        disc_pred = discriminator(torch.stack((x, pred)).view(x.shape[0], 6, 64, 64))
+        disc_pred = discriminator(torch.cat((x, pred), dim=1))
         loss_d = criterion(disc_pred[:, 0].view(-1), real_labels) + criterion(disc_pred[:, 1].view(-1), real_labels)
         # loss_d = criterion_mse_mean(disc_pred[:, 0].view(-1), real_labels) + criterion(disc_pred[:, 0].view(-1), real_labels)
         # loss_d = criterion(disc_pred[:, 0].view(-1), real_labels)
