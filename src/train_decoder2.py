@@ -39,7 +39,7 @@ important("Parsing args")
 parser = argparse.ArgumentParser()
 parser.add_argument("--max-epochs", type=int, default=50)
 parser.add_argument("--batch-size", type=int, default=4)
-parser.add_argument("--max-lr", type=float, default=0.00001)
+parser.add_argument("--max-lr", type=float, default=0.01)
 
 args = parser.parse_args()
 log(pretty_format(args.__dict__))
@@ -79,7 +79,7 @@ image_transforms3 = nn.Sequential(
 
 # dataset = Dataset(config)
 dataset = dset.ImageFolder(
-    root="dataset/images/",
+    root=config.dataDir,
     transform=transforms.Compose(
         [ 
             transforms.Resize(image_size),
@@ -108,8 +108,7 @@ criterion_mse = nn.MSELoss(reduction="none")
 criterion_mse_mean = nn.MSELoss(reduction="mean")
 lr_start_div_factor = 10
 # should start at div by / 100
-lr_mul = 10
-lr_m = 0.001 * lr_mul
+lr_m = config.max_lr
 optimizer = optim.Adam(model2.parameters(), lr=lr_m, betas=(0.99, 0.99))
 optimizer_d = optim.Adam(model2.parameters(), lr=lr_m, betas=(0.99, 0.99))
 total_steps = 100_000_000
@@ -338,12 +337,25 @@ for epoch in range(args.max_epochs):
             disc_real_loss = criterion(disc_real[:, 0].view(-1), real_labels) + criterion(disc_real[:, 1].view(-1), real_labels)
             (disc_real_loss / (target_batch // config.batch_size) / steps).backward()
 
+            rev_mix2 = torch.flip(mix2, dims=(0,))
+            disc_fake2 = discriminator(torch.cat((mix1, rev_mix2), dim=1))
+            disc_fake_loss2 = criterion(disc_fake2[:, 0].view(-1), fake_labels) + criterion(disc_fake2[:, 1].view(-1), real_labels)
+            (disc_fake_loss2 / (target_batch // config.batch_size) / steps).backward()
+
+            disc_real_loss = torch.divide(disc_real_loss + disc_fake_loss2, 2)
+
             pred, pred_diff  = model2(mix1, adjusted_step, returnDiff=True)
             disc_fake = discriminator(torch.cat((mix1, pred), dim=1))
             disc_fake_loss = criterion(disc_fake[:, 0].view(-1), fake_labels) + criterion(disc_fake[:, 1].view(-1), fake_labels)
             loss_d_factor = 1.0 / max(disc_real_loss.item(), 0.05)
             disc_fake_loss = disc_fake_loss
             (disc_fake_loss / (target_batch // config.batch_size) / steps).backward()
+
+            rev_pred = torch.flip(pred, dims=(0,))
+            disc_fake2 = discriminator(torch.cat((mix1, rev_pred), dim=1))
+            disc_fake_loss2 = criterion(disc_fake2[:, 0].view(-1), fake_labels) + criterion(disc_fake2[:, 1].view(-1), fake_labels)
+            disc_fake_loss = torch.divide(disc_fake_loss + disc_fake_loss2, 2)
+            (disc_fake_loss2 / (target_batch // config.batch_size) / steps).backward()
 
             model2.requires_grad_(True)
             discriminator.requires_grad_(False)

@@ -38,7 +38,7 @@ important("Parsing args")
 parser = argparse.ArgumentParser()
 parser.add_argument("--max-epochs", type=int, default=50)
 parser.add_argument("--batch-size", type=int, default=4)
-parser.add_argument("--max-lr", type=float, default=0.00001)
+parser.add_argument("--max-lr", type=float, default=0.01)
 
 args = parser.parse_args()
 log(pretty_format(args.__dict__))
@@ -78,7 +78,7 @@ image_transforms3 = nn.Sequential(
 
 # dataset = Dataset(config)
 dataset = dset.ImageFolder(
-    root="dataset/images/",
+    root=config.dataDir,
     transform=transforms.Compose(
         [ 
             transforms.Resize(image_size),
@@ -101,9 +101,8 @@ criterion_mse = nn.MSELoss(reduction="none")
 criterion_mse_mean = nn.MSELoss(reduction="mean")
 lr_start_div_factor = 10
 # should start at div by / 100
-lr_mul = 10
-lr_d = 0.001 * lr_mul
-lr_m = 0.001 * lr_mul
+lr_d = config.max_lr
+lr_m = config.max_lr
 optimizer = optim.Adam(model.parameters(), lr=lr_m, betas=(0.5, 0.5))
 optimizer_e = optim.Adam(encoder.parameters(), lr=lr_m, betas=(0.5, 0.5))
 optimizer_d = optim.Adam(discriminator.parameters(), lr=lr_d, betas=(0.5, 0.5))
