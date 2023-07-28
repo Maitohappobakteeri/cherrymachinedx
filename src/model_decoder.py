@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.parallel
 import torch.utils.data
 
+from database_memory import DatabaseMemory
+from database_image_memory import DatabaseImageMemory
 
 def weights_init(m):
     classname = m.__class__.__name__
@@ -200,6 +202,9 @@ class Model(nn.Module):
             # 64 x 64
         )
 
+        self.memory = DatabaseMemory(ngpu, features * 32, 3)
+        self.memory_image = DatabaseImageMemory(ngpu, features, 3)
+
         self.dropoutp5 = nn.Dropout(p=0.05)
         self.dropoutp10 = nn.Dropout(p=0.1)
         self.dropoutp20 = nn.Dropout(p=0.2)
@@ -219,9 +224,11 @@ class Model(nn.Module):
         decoded = self.decoder(input.view((batch_size, -1)))
         output = decoded.reshape((batch_size, -1, features))
         (output, _) = self.attention(output, output, output, need_weights=False)
+        output = self.memory(output.reshape((batch_size, features * 32)))
         output = output.reshape((batch_size, -1, features * 8))
         output = og = self.dropoutp5(output)
         output = self.decoder_image(og.view((batch_size, -1, 1, 1)))
+        output = self.memory_image(output)
         output2 = self.decoder_image2(og.view((batch_size, -1, 1, 1)))
 
         output_simple = self.decoder_image_simple(og.view((batch_size, -1, 1, 1)))

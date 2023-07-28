@@ -146,14 +146,14 @@ scheduler_d = torch.optim.lr_scheduler.OneCycleLR(
 if os.path.isfile("./trained_model"):
     trained_model = torch.load("./trained_model", map_location=torch.device(device))
     model.load_state_dict(trained_model["model"])
-    optimizer.load_state_dict(trained_model["model_optimizer"])
-    scheduler.load_state_dict(trained_model["model_scheduler"])
+    # optimizer.load_state_dict(trained_model["model_optimizer"])
+    # scheduler.load_state_dict(trained_model["model_scheduler"])
     encoder.load_state_dict(trained_model["encoder"])
-    optimizer_e.load_state_dict(trained_model["encoder_optimizer"])
-    scheduler_e.load_state_dict(trained_model["encoder_scheduler"])
+    # optimizer_e.load_state_dict(trained_model["encoder_optimizer"])
+    # scheduler_e.load_state_dict(trained_model["encoder_scheduler"])
     discriminator.load_state_dict(trained_model["discriminator"])
-    optimizer_d.load_state_dict(trained_model["discriminator_optimizer"])
-    scheduler_d.load_state_dict(trained_model["discriminator_scheduler"])
+    # optimizer_d.load_state_dict(trained_model["discriminator_optimizer"])
+    # scheduler_d.load_state_dict(trained_model["discriminator_scheduler"])
 
 def pack_loss_history(loss_history):
     new_list = []
@@ -411,14 +411,14 @@ for epoch in range(args.max_epochs):
 
 trained_model = {
     "model": model.state_dict(),
-    "model_optimizer": optimizer.state_dict(),
-    "model_scheduler": scheduler.state_dict(),
+    # "model_optimizer": optimizer.state_dict(),
+    # "model_scheduler": scheduler.state_dict(),
     "encoder": encoder.state_dict(),
-    "encoder_optimizer": optimizer_e.state_dict(),
-    "encoder_scheduler": scheduler_e.state_dict(),
+    # "encoder_optimizer": optimizer_e.state_dict(),
+    # "encoder_scheduler": scheduler_e.state_dict(),
     "discriminator": discriminator.state_dict(),
-    "discriminator_optimizer": optimizer_d.state_dict(),
-    "discriminator_scheduler": scheduler_d.state_dict(),
+    # "discriminator_optimizer": optimizer_d.state_dict(),
+    # "discriminator_scheduler": scheduler_d.state_dict(),
 }
 torch.save(trained_model, "./trained_model")
 # plot_simple_array(
@@ -428,5 +428,7 @@ torch.save(trained_model, "./trained_model")
 #     "../loss_history.png",
 # )
 
+model.memory.save_db()
+model.memory_image.save_db()
 save_predictions()
 important("Done")
