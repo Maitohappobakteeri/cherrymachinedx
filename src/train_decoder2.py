@@ -12,6 +12,8 @@ from model_decoder import Model
 from decoder2.model_improve import Model as Model2, max_steps
 from encoder import Encoder
 from is_same_discriminator import IsSameDiscriminator
+from database_memory import update as update_memory
+from database_image_memory import update as update_image_memory
 from config import Configuration
 from plot import plot_simple_array, show_fakes_gen1, show_fakes_gen1_with_fakes, save_generation_snapshot, show_fakes_gen1_with_fakes_with_steps
 
@@ -400,6 +402,10 @@ for epoch in range(args.max_epochs):
         
         if (1 + batch) % (128) == 0 or (batch + 1) == len(dataloader):
             save_predictions(10, "quick")
+            update_memory()
+            update_image_memory()
+    update_memory()
+    update_image_memory()
     log(
         "",
         repeating_status=True,
